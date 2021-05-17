@@ -6,7 +6,7 @@ from nltk import sent_tokenize
 
 import torch
 from transformers import(
-    AutoModelForSeq2SeqLM, 
+    AutoModelForSeq2SeqLM,
     AutoTokenizer,
     PreTrainedModel,
     PreTrainedTokenizer,
@@ -40,7 +40,7 @@ class QGPipeline:
             self.ans_model.to(self.device)
 
         assert self.model.__class__.__name__ in ["T5ForConditionalGeneration", "BartForConditionalGeneration"]
-        
+
         if "T5ForConditionalGeneration" in self.model.__class__.__name__:
             self.model_type = "t5"
         else:
@@ -50,7 +50,7 @@ class QGPipeline:
         inputs = " ".join(inputs.split())
         sents, answers = self._extract_answers(inputs)
         flat_answers = list(itertools.chain(*answers))
-        
+
         if len(flat_answers) == 0:
           return []
 
@@ -58,41 +58,41 @@ class QGPipeline:
             qg_examples = self._prepare_inputs_for_qg_from_answers_prepend(inputs, answers)
         else:
             qg_examples = self._prepare_inputs_for_qg_from_answers_hl(sents, answers)
-        
+
         qg_inputs = [example['source_text'] for example in qg_examples]
         questions = self._generate_questions(qg_inputs)
         output = [{'answer': example['answer'], 'question': que} for example, que in zip(qg_examples, questions)]
         return output
-    
+
     def _generate_questions(self, inputs):
         inputs = self._tokenize(inputs, padding=True, truncation=True)
-        
+
         outs = self.model.generate(
-            input_ids=inputs['input_ids'].to(self.device), 
-            attention_mask=inputs['attention_mask'].to(self.device), 
+            input_ids=inputs['input_ids'].to(self.device),
+            attention_mask=inputs['attention_mask'].to(self.device),
             max_length=32,
             num_beams=4,
         )
-        
+
         questions = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in outs]
         return questions
-    
+
     def _extract_answers(self, context):
         sents, inputs = self._prepare_inputs_for_ans_extraction(context)
         inputs = self._tokenize(inputs, padding=True, truncation=True)
 
         outs = self.ans_model.generate(
-            input_ids=inputs['input_ids'].to(self.device), 
-            attention_mask=inputs['attention_mask'].to(self.device), 
+            input_ids=inputs['input_ids'].to(self.device),
+            attention_mask=inputs['attention_mask'].to(self.device),
             max_length=32,
         )
-        
+
         dec = [self.ans_tokenizer.decode(ids, skip_special_tokens=False) for ids in outs]
         answers = [item.split('<sep>') for item in dec]
         answers = [i[:-1] for i in answers]
-        
+
         return sents, answers
-    
+
     def _tokenize(self,
         inputs,
         padding=True,
@@ -101,7 +101,7 @@ class QGPipeline:
         max_length=512
     ):
         inputs = self.tokenizer.batch_encode_plus(
-            inputs, 
+            inputs,
             max_length=max_length,
             add_special_tokens=add_special_tokens,
             truncation=truncation,
@@ -110,7 +110,7 @@ class QGPipeline:
             return_tensors="pt"
         )
         return inputs
-    
+
     def _prepare_inputs_for_ans_extraction(self, text):
         sents = sent_tokenize(text)
 
@@ -122,13 +122,13 @@ class QGPipeline:
                     sent = "<hl> %s <hl>" % sent
                 source_text = "%s %s" % (source_text, sent)
                 source_text = source_text.strip()
-            
+
             if self.model_type == "t5":
                 source_text = source_text + " </s>"
             inputs.append(source_text)
 
         return sents, inputs
-    
+
     def _prepare_inputs_for_qg_from_answers_hl(self, sents, answers):
         inputs = []
         for i, answer in enumerate(answers):
@@ -136,23 +136,23 @@ class QGPipeline:
             for answer_text in answer:
                 sent = sents[i]
                 sents_copy = sents[:]
-                
+
                 answer_text = answer_text.strip()
-                
+
                 ans_start_idx = sent.index(answer_text)
-                
+
                 sent = f"{sent[:ans_start_idx]} <hl> {answer_text} <hl> {sent[ans_start_idx + len(answer_text): ]}"
                 sents_copy[i] = sent
-                
+
                 source_text = " ".join(sents_copy)
-                source_text = f"generate question: {source_text}" 
+                source_text = f"generate question: {source_text}"
                 if self.model_type == "t5":
                     source_text = source_text + " </s>"
-                
+
                 inputs.append({"answer": answer_text, "source_text": source_text})
-        
+
         return inputs
-    
+
     def _prepare_inputs_for_qg_from_answers_prepend(self, context, answers):
         flat_answers = list(itertools.chain(*answers))
         examples = []
@@ -160,15 +160,15 @@ class QGPipeline:
             source_text = f"answer: {answer} context: {context}"
             if self.model_type == "t5":
                 source_text = source_text + " </s>"
-            
+
             examples.append({"answer": answer, "source_text": source_text})
         return examples
 
-    
+
 class MultiTaskQAQGPipeline(QGPipeline):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-    
+
     def __call__(self, inputs: Union[Dict, str]):
         if type(inputs) is str:
             # do qg
@@ -176,20 +176,20 @@ class MultiTaskQAQGPipeline(QGPipeline):
         else:
             # do qa
             return self._extract_answer(inputs["question"], inputs["context"])
-    
+
     def _prepare_inputs_for_qa(self, question, context):
         source_text = f"question: {question}  context: {context}"
         if self.model_type == "t5":
             source_text = source_text + " </s>"
         return  source_text
-    
+
     def _extract_answer(self, question, context):
         source_text = self._prepare_inputs_for_qa(question, context)
         inputs = self._tokenize([source_text], padding=False)
-    
+
         outs = self.model.generate(
-            input_ids=inputs['input_ids'].to(self.device), 
-            attention_mask=inputs['attention_mask'].to(self.device), 
+            input_ids=inputs['input_ids'].to(self.device),
+            attention_mask=inputs['attention_mask'].to(self.device),
             max_length=16,
         )
 
@@ -212,12 +212,12 @@ class E2EQGPipeline:
         self.model.to(self.device)
 
         assert self.model.__class__.__name__ in ["T5ForConditionalGeneration", "BartForConditionalGeneration"]
-        
+
         if "T5ForConditionalGeneration" in self.model.__class__.__name__:
             self.model_type = "t5"
         else:
             self.model_type = "bart"
-        
+
         self.default_generate_kwargs = {
             "max_length": 256,
             "num_beams": 4,
@@ -225,7 +225,7 @@ class E2EQGPipeline:
             "no_repeat_ngram_size": 3,
             "early_stopping": True,
         }
-    
+
     def __call__(self, context: str, **generate_kwargs):
         inputs = self._prepare_inputs_for_e2e_qg(context)
 
@@ -233,9 +233,9 @@ class E2EQGPipeline:
         # find a better way to do this
         if not generate_kwargs:
             generate_kwargs = self.default_generate_kwargs
-        
+
         input_length = inputs["input_ids"].shape[-1]
-        
+
         # max_length = generate_kwargs.get("max_length", 256)
         # if input_length < max_length:
         #     logger.warning(
@@ -245,7 +245,7 @@ class E2EQGPipeline:
         #     )
 
         outs = self.model.generate(
-            input_ids=inputs['input_ids'].to(self.device), 
+            input_ids=inputs['input_ids'].to(self.device),
             attention_mask=inputs['attention_mask'].to(self.device),
             **generate_kwargs
         )
@@ -254,15 +254,15 @@ class E2EQGPipeline:
         questions = prediction.split("<sep>")
         questions = [question.strip() for question in questions[:-1]]
         return questions
-    
+
     def _prepare_inputs_for_e2e_qg(self, context):
         source_text = f"generate questions: {context}"
         if self.model_type == "t5":
             source_text = source_text + " </s>"
-        
+
         inputs = self._tokenize([source_text], padding=False)
         return inputs
-    
+
     def _tokenize(
         self,
         inputs,
@@ -272,7 +272,7 @@ class E2EQGPipeline:
         max_length=512
     ):
         inputs = self.tokenizer.batch_encode_plus(
-            inputs, 
+            inputs,
             max_length=max_length,
             add_special_tokens=add_special_tokens,
             truncation=truncation,
@@ -283,9 +283,56 @@ class E2EQGPipeline:
         return inputs
 
 
+class QGenerationFromAnswer(QGPipeline):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def __call__(self, inputs: Union[Dict, str]):
+        if type(inputs) is str:
+            # do qg
+            print("Vanilla question generation")
+            return super().__call__(inputs)
+        else:
+            # do qg using answer
+            print("Question generation from answer")
+            return self._extract_questions(inputs["context"],
+                                           inputs["answers"])
+
+    def _extract_questions(self, context, answers):
+        # context is sentences, answers = list of answers per sentence
+        # print("answer", answer)
+
+        sents, inputs = self._prepare_inputs_for_ans_extraction(context)
+        if len(sents) != len(answers):
+            print(
+                "Cannot extract questions. Must provide same number of answers as sentences in context")
+
+        if self.qg_format == "prepend":
+            qg_examples = self._prepare_inputs_for_qg_from_answers_prepend(
+                inputs, answers)
+        else:
+            qg_examples = self._prepare_inputs_for_qg_from_answers_hl(sents,
+                                                                      answers)
+
+        # print("qg_examples", qg_examples)
+
+        qg_inputs = [example['source_text'] for example in qg_examples]
+        questions = self._generate_questions(qg_inputs)
+        output = [{'answer': example['answer'], 'question': que} for
+                  example, que in zip(qg_examples, questions)]
+        return output
+
+
 SUPPORTED_TASKS = {
     "question-generation": {
         "impl": QGPipeline,
+        "default": {
+            "model": "valhalla/t5-small-qg-hl",
+            "ans_model": "valhalla/t5-small-qa-qg-hl",
+        }
+    },
+    "qg-from-answer": {
+        "impl": QGenerationFromAnswer,
         "default": {
             "model": "valhalla/t5-small-qg-hl",
             "ans_model": "valhalla/t5-small-qa-qg-hl",
@@ -305,6 +352,7 @@ SUPPORTED_TASKS = {
     }
 }
 
+
 def pipeline(
     task: str,
     model: Optional = None,
@@ -317,7 +365,9 @@ def pipeline(
 ):
     # Retrieve the task
     if task not in SUPPORTED_TASKS:
-        raise KeyError("Unknown task {}, available tasks are {}".format(task, list(SUPPORTED_TASKS.keys())))
+        raise KeyError("Unknown task {}, available tasks are {}".format(task,
+                                                                        list(
+                                                                            SUPPORTED_TASKS.keys())))
 
     targeted_task = SUPPORTED_TASKS[task]
     task_class = targeted_task["impl"]
@@ -325,7 +375,7 @@ def pipeline(
     # Use default model/config/tokenizer for the task if no model is provided
     if model is None:
         model = targeted_task["default"]["model"]
-    
+
     # Try to infer tokenizer from model or config name (if provided as str)
     if tokenizer is None:
         if isinstance(model, str):
@@ -336,20 +386,21 @@ def pipeline(
                 "Impossible to guess which tokenizer to use. "
                 "Please provided a PretrainedTokenizer class or a path/identifier to a pretrained tokenizer."
             )
-    
+
     # Instantiate tokenizer if needed
     if isinstance(tokenizer, (str, tuple)):
         if isinstance(tokenizer, tuple):
             # For tuple we have (tokenizer name, {kwargs})
-            tokenizer = AutoTokenizer.from_pretrained(tokenizer[0], **tokenizer[1])
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer[0],
+                                                      **tokenizer[1])
         else:
             tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    
+
     # Instantiate model if needed
     if isinstance(model, str):
         model = AutoModelForSeq2SeqLM.from_pretrained(model)
-    
-    if task == "question-generation":
+
+    if task == "question-generation" or task == "qg-from-answer":  # check whether to use model or ans_model
         if ans_model is None:
             # load default ans model
             ans_model = targeted_task["default"]["ans_model"]
@@ -366,21 +417,31 @@ def pipeline(
                         "Impossible to guess which tokenizer to use. "
                         "Please provided a PretrainedTokenizer class or a path/identifier to a pretrained tokenizer."
                     )
-            
+
             # Instantiate tokenizer if needed
             if isinstance(ans_tokenizer, (str, tuple)):
                 if isinstance(ans_tokenizer, tuple):
                     # For tuple we have (tokenizer name, {kwargs})
-                    ans_tokenizer = AutoTokenizer.from_pretrained(ans_tokenizer[0], **ans_tokenizer[1])
+                    ans_tokenizer = AutoTokenizer.from_pretrained(
+                        ans_tokenizer[0], **ans_tokenizer[1])
                 else:
-                    ans_tokenizer = AutoTokenizer.from_pretrained(ans_tokenizer)
+                    ans_tokenizer = AutoTokenizer.from_pretrained(
+                        ans_tokenizer)
 
             if isinstance(ans_model, str):
                 ans_model = AutoModelForSeq2SeqLM.from_pretrained(ans_model)
-    
+
     if task == "e2e-qg":
         return task_class(model=model, tokenizer=tokenizer, use_cuda=use_cuda)
     elif task == "question-generation":
-        return task_class(model=model, tokenizer=tokenizer, ans_model=ans_model, ans_tokenizer=ans_tokenizer, qg_format=qg_format, use_cuda=use_cuda)
+        return task_class(model=model, tokenizer=tokenizer,
+                          ans_model=ans_model, ans_tokenizer=ans_tokenizer,
+                          qg_format=qg_format, use_cuda=use_cuda)
+    elif task == "qg-from-answer":  # check about ans_model
+        return task_class(model=model, tokenizer=tokenizer,
+                          ans_model=ans_model, ans_tokenizer=ans_tokenizer,
+                          qg_format=qg_format, use_cuda=use_cuda)
     else:
-        return task_class(model=model, tokenizer=tokenizer, ans_model=model, ans_tokenizer=tokenizer, qg_format=qg_format, use_cuda=use_cuda)
+        return task_class(model=model, tokenizer=tokenizer, ans_model=model,
+                          ans_tokenizer=tokenizer, qg_format=qg_format,
+                          use_cuda=use_cuda)
