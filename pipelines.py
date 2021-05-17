@@ -306,6 +306,7 @@ class QGenerationFromAnswer(QGPipeline):
         if len(sents) != len(answers):
             print(
                 "Cannot extract questions. Must provide same number of answers as sentences in context")
+            return []
 
         if self.qg_format == "prepend":
             qg_examples = self._prepare_inputs_for_qg_from_answers_prepend(
